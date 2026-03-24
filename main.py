@@ -1,70 +1,120 @@
 import asyncio
 import logging
+import os
+import uuid
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-import instaloader
+from aiohttp import web
+import yt_dlp
 
-# --- الإعدادات ---
-API_TOKEN = '8609584907:AAGrtBOu6anRKW1iSQH3kAJiv4umJUkb1m8'
-CHANNEL_ID = '@Ramy_Premium'
+# --- الإعدادات (تأكد من وضع التوكن الصحيح) ---
+API_TOKEN = 'ضع_توكن_بوت_تيك_توك_هنا' 
+CHANNEL_ID = '@Ramy_Premium' # آيدي القناة للتحقق من الاشتراك
 CHANNEL_LINK = 'https://t.me/Ramy_Premium'
-INSTA_USER = "dragon.4905830"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-L = instaloader.Instaloader()
 
-# --- دالة تحميل الجلسة (السر في النجاح) ---
-async def load_insta_session():
+# --- دالة التحقق من الاشتراك الإجباري ---
+async def check_subscription(user_id):
     try:
-        print(f"🔄 جاري محاولة تحميل جلسة المستخدم: {INSTA_USER}...")
-        # يحاول جلب الملف الذي أنشأته أنت يدوياً في الخطوة رقم 1
-        await asyncio.to_thread(L.load_session_from_file, INSTA_USER)
-        print("✅ تم تحميل الجلسة بنجاح! البوت الآن موثوق لدى إنستغرام.")
-    except FileNotFoundError:
-        print("❌ لم يتم العثور على ملف الجلسة! يرجى تنفيذ أمر instaloader --login أولاً.")
-    except Exception as e:
-        print(f"⚠️ خطأ أثناء تحميل الجلسة: {e}")
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        # إذا كان العضو ليس غادراً أو مطروداً فهو مشترك
+        if member.status in ['member', 'creator', 'administrator']:
+            return True
+        return False
+    except Exception:
+        return False
 
+# --- لوحة أزرار الاشتراك ---
 def sub_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="اضغط هنا للاشتراك في القناة ✅", url=CHANNEL_LINK)]
+        [InlineKeyboardButton(text="انضم للقناة أولاً 📢", url=CHANNEL_LINK)],
+        [InlineKeyboardButton(text="لقد اشتركت، فعل البوت ✅", callback_data="check_sub")]
     ])
+
+# --- دالة تحميل تيك توك ---
+def download_tiktok(url):
+    unique_filename = f"tiktok_{uuid.uuid4().hex}.mp4"
+    ydl_opts = {
+        'format': 'bestvideo+bestaudio/best',
+        'outtmpl': unique_filename,
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+        return unique_filename
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(f"أهلاً بك {message.from_user.first_name}!\nالبوت الآن يعمل بكامل طاقته، أرسل الرابط للتحميل.", reply_markup=sub_kb())
+    is_sub = await check_subscription(message.from_user.id)
+    if not is_sub:
+        await message.answer(
+            f"مرحباً بك {message.from_user.first_name}! 👋\n\n"
+            f"عذراً، يجب عليك الاشتراك في قناة المتجر أولاً لاستخدام البوت والاستفادة من خدماتنا.",
+            reply_markup=sub_kb()
+        )
+    else:
+        await message.answer(
+            "أهلاً بك مجدداً! البوت مفعل الآن. أرسل رابط تيك توك للتحميل بدون علامة مائية 🎬",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="متجر رامي بريميوم 🛒", url=CHANNEL_LINK)]
+            ])
+        )
+
+@dp.callback_query(lambda c: c.data == "check_sub")
+async def process_callback_check_sub(callback_query: types.CallbackQuery):
+    is_sub = await check_subscription(callback_query.from_user.id)
+    if is_sub:
+        await bot.answer_callback_query(callback_query.id, text="تم تفعيل البوت بنجاح! ✅")
+        await bot.send_message(callback_query.from_user.id, "مبروك! أرسل الآن أي رابط تيك توك وسأقوم بتحميله فوراً.")
+    else:
+        await bot.answer_callback_query(callback_query.id, text="لم تشترك في القناة بعد! ⚠️", show_alert=True)
 
 @dp.message()
-async def handle_insta(message: types.Message):
-    if not message.text or "instagram.com" not in message.text:
+async def handle_message(message: types.Message):
+    if not message.text or "tiktok.com" not in message.text:
         return
 
-    user = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=message.from_user.id)
-    if user.status in ['left', 'kicked']:
-        return await message.answer("⚠️ يجب الاشتراك أولاً!", reply_markup=sub_kb())
+    # التحقق من الاشتراك قبل كل عملية تحميل
+    is_sub = await check_subscription(message.from_user.id)
+    if not is_sub:
+        await message.answer("عذراً، اشتراكك في القناة ضروري لاستمرار الخدمة مجاناً:", reply_markup=sub_kb())
+        return
 
-    msg = await message.answer("⏳ جاري سحب الفيديو...")
+    msg = await message.answer("⏳ جاري التحميل من تيك توك بدون علامة مائية...")
+    
     try:
-        url = message.text
-        shortcode = url.split("/")[-2] if url.endswith('/') else url.split("/")[-1]
-        shortcode = shortcode.split("?")[0]
-        
-        # جلب البيانات باستخدام الجلسة المحملة
-        post = await asyncio.to_thread(instaloader.Post.from_shortcode, L.context, shortcode)
-        
-        if post.is_video:
-            await message.answer_video(post.video_url, caption="✅ تم التحميل بنجاح")
-        else:
-            await message.answer_photo(post.url, caption="✅ تم التحميل بنجاح")
+        video_file = await asyncio.to_thread(download_tiktok, message.text)
+        video = types.FSInputFile(video_file)
+        await message.answer_video(
+            video, 
+            caption="✅ تم التحميل بواسطة بوت رامي تيك توك!\n🛒 @Ramy_Premium"
+        )
+        if os.path.exists(video_file):
+            os.remove(video_file)
         await msg.delete()
     except Exception as e:
         logging.error(e)
-        await msg.edit_text("❌ فشل التحميل. قد يكون الفيديو خاصاً أو الرابط غير صحيح.")
+        await msg.edit_text("❌ حدث خطأ! الرابط قد يكون لخاص أو محذوف.")
+
+# --- جزء استقرار Render (المنفذ الوهمي) ---
+async def handle(request):
+    return web.Response(text="TikTok Bot is Live and Protecting your Channel! 🚀")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
 
 async def main():
-    await load_insta_session()
+    asyncio.create_task(start_web_server())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
